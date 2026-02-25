@@ -1,0 +1,207 @@
+version: '3.8'
+
+# Сети для изоляции сервисов
+networks:
+  backend:
+    driver: bridge
+
+# Постоянные тома для данных
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+services:
+  # База данных PostgreSQL
+  postgres:
+    image: postgres:16-alpine  # alpine — минимальный образ
+    container_name: meal_planner_db
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-meal_planner}
+    ports:
+      - "127.0.0.1:5432:5432"  # только локальный доступ
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------
+  # Redis (кэш и FSM для бота)
+  # ----------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: meal_planner_redis
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes  # сохранять данные на диск
+    ports:
+      - "127.0.0.1:6379:6379"  # только локальный доступ
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------
+  # RabbitMQ (брокер сообщений)
+  # ----------------------------
+  rabbitmq:
+    image: rabbitmq:4-management-alpine  # с веб-интерфейсом
+    container_name: meal_planner_rabbitmq
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "127.0.0.1:5672:5672"   # AMQP протокол
+      - "127.0.0.1:15672:15672" # веб-интерфейс (admin)
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ----------------------------
+  # FastAPI (основное приложение)
+  # ----------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meal_planner_api
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Переопределяем хосты для работы в Docker-сети
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      # Режим разработки (--reload) только если нужно
+      UVICORN_RELOAD: ${UVICORN_RELOAD:-false}
+    ports:
+      - "${API_PORT:-8000}:8000"  # можно настроить в .env
+    volumes:
+      # Для разработки — монтируем код (чтобы не пересобирать образ)
+      - ./app:/app
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             uvicorn app.api.main:app --host 0.0.0.0 --port 8000 ${UVICORN_RELOAD:+--reload}"
+
+  # ----------------------------
+  # Telegram Bot (отдельный сервис)
+  # ----------------------------
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meal_planner_bot
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_started  # бот может запускаться после API
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      # Указываем, что это бот
+      SERVICE_TYPE: bot
+    volumes:
+      - ./app:/app
+    command: python -m app.bot.main  # точка входа для бота
+
+  # ----------------------------
+  # Celery Worker (фоновые задачи)
+  # ----------------------------
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meal_planner_celery
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      # Указываем, что это воркер
+      SERVICE_TYPE: celery
+    volumes:
+      - ./app:/app
+    command: celery -A app.scheduler.tasks worker --loglevel=info
+
+  # ----------------------------
+  # Celery Beat (шедулер для периодических задач)
+  # ----------------------------
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meal_planner_beat
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      SERVICE_TYPE: beat
+    volumes:
+      - ./app:/app
+    command: celery -A app.scheduler.tasks beat --loglevel=info
