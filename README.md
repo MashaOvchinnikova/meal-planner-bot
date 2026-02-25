@@ -30,11 +30,6 @@ Telegram-бот и веб-сервис для планирования пита�
 - 🔌 **Интеграции** — погода, цены из магазинов
 
 ---
-Проект построен на **микросервисной архитектуре** с брокером сообщений:
-[Telegram Bot] → (событие) → [RabbitMQ] → [Сервис уведомлений]
-                           ↘ [RabbitMQ] → [Сервис генерации списков]
-[FastAPI]      → (событие) → [RabbitMQ] → [Сервис аналитики]
-[PostgreSQL] ← [Redis (кэш/FSM)] ← [Все сервисы]
 
 ### Ключевые компоненты:
 - **aiogram 3.x** — асинхронный Telegram бот с машиной состояний
@@ -43,41 +38,4 @@ Telegram-бот и веб-сервис для планирования пита�
 - **Redis** — кэширование и хранилище состояний FSM
 - **RabbitMQ** — брокер событий для асинхронной обработки
 - **Docker** — контейнеризация всех сервисов
-  
-### Структура проекта
-meal-planner/
-├── app/
-│   ├── bot/                      # Telegram бот
-│   │   ├── handlers/              # Обработчики команд
-│   │   ├── keyboards/             # Клавиатуры (inline/reply)
-│   │   ├── middlewares/           # Мидлвари (аутентификация, логи)
-│   │   └── states/                 # Машина состояний (FSM)
-│   ├── api/                       # FastAPI
-│   │   ├── v1/                     # Версионирование API
-│   │   │   ├── recipes.py          # Эндпоинты рецептов
-│   │   │   ├── meal_plans.py       # Эндпоинты планов
-│   │   │   └── shopping_list.py    # Эндпоинты списков
-│   │   └── dependencies.py         # Зависимости (БД, текущий пользователь)
-│   ├── core/                       # Ядро
-│   │   ├── config.py                # Pydantic конфиг (настройки из .env)
-│   │   ├── database.py              # Подключение к БД (asyncpg)
-│   │   ├── models.py                 # SQLAlchemy модели
-│   │   └── redis.py                  # Redis клиент (aioredis)
-│   ├── services/                    # Бизнес-логика
-│   │   ├── recipe_service.py         # Поиск и фильтрация рецептов
-│   │   ├── shopping_list_generator.py # Генерация списков (агрегация)
-│   │   └── notification_service.py    # Уведомления и напоминания
-│   ├── scheduler/                    # Фоновые задачи
-│   │   ├── tasks.py                   # Celery задачи
-│   │   └── reminders.py                # Шедулеры (APScheduler)
-│   ├── utils/                         # Вспомогательное
-│   │   ├── external_api.py             # Интеграции (погода, магазины)
-│   │   └── validators.py               # Валидаторы данных
-│   ├── migrations/                     # Alembic миграции
-│   └── tests/                          # Тесты (pytest)
-├── docker-compose.yml
-├── Dockerfile
-├── .env.example
-├── .gitignore
-└── requirements.txt
 
